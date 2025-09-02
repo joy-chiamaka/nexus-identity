@@ -197,3 +197,116 @@
     }))
   )
 )
+
+;; Administrative verification of submitted zero-knowledge proofs
+(define-public (verify-proof (proof-hash (buff 32)))
+  (let (
+      (proof (map-get? zero-knowledge-proofs proof-hash))
+      (sender tx-sender)
+    )
+    (asserts! (is-some proof) ERR-INVALID-PROOF)
+    (asserts! (is-eq sender (var-get admin)) ERR-NOT-AUTHORIZED)
+
+    ;; Mark proof as verified while preserving all other data
+    (ok (map-set zero-knowledge-proofs proof-hash
+      (merge (unwrap-panic proof) { verified: true })
+    ))
+  )
+)
+
+;; CREDENTIAL LIFECYCLE MANAGEMENT
+
+;; Issues verifiable credentials with comprehensive validation
+(define-public (issue-credential
+    (subject principal)
+    (claim-hash (buff 32))
+    (expiration uint)
+    (metadata (string-utf8 256))
+  )
+  (let (
+      (sender tx-sender)
+      (current-nonce (var-get credential-nonce))
+      (credential-id {
+        issuer: sender,
+        nonce: current-nonce,
+      })
+      (issuer-identity (map-get? identities sender))
+      (subject-identity (map-get? identities subject))
+    )
+    ;; Validate all credential parameters and party registrations
+    (asserts! (is-some issuer-identity) ERR-NOT-REGISTERED)
+    (asserts! (is-some subject-identity) ERR-NOT-REGISTERED)
+    (asserts! (is-valid-hash claim-hash) ERR-INVALID-INPUT)
+    (asserts! (is-valid-expiration expiration) ERR-INVALID-EXPIRATION)
+    (asserts! (is-valid-metadata-length metadata) ERR-INVALID-INPUT)
+
+    ;; Increment global nonce and create immutable credential
+    (var-set credential-nonce (+ current-nonce u1))
+    (ok (map-set credentials credential-id {
+      subject: subject,
+      claim-hash: claim-hash,
+      expiration: expiration,
+      revoked: false,
+      metadata: metadata,
+    }))
+  )
+)
+
+;; Revokes issued credentials with issuer authorization
+(define-public (revoke-credential
+    (issuer principal)
+    (nonce uint)
+  )
+  (let (
+      (sender tx-sender)
+      (credential-id {
+        issuer: issuer,
+        nonce: nonce,
+      })
+      (credential (map-get? credentials credential-id))
+    )
+    (asserts! (is-some credential) ERR-INVALID-CREDENTIAL)
+    (asserts! (is-eq sender issuer) ERR-NOT-AUTHORIZED)
+
+    ;; Mark credential as revoked while preserving historical data
+    (ok (map-set credentials credential-id
+      (merge (unwrap-panic credential) { revoked: true })
+    ))
+  )
+)
+
+;; REPUTATION SYSTEM ENGINE
+
+;; Updates reputation scores with administrative oversight and validation
+(define-public (update-reputation
+    (subject principal)
+    (score-change int)
+  )
+  (let (
+      (sender tx-sender)
+      (identity (map-get? identities subject))
+      (current-score (get reputation-score (unwrap-panic identity)))
+      (score-change-abs (if (< score-change 0)
+        (* score-change -1)
+        score-change
+      ))
+    )
+    (asserts! (is-eq sender (var-get admin)) ERR-NOT-AUTHORIZED)
+    (asserts! (is-some identity) ERR-NOT-REGISTERED)
+    (asserts!
+      (or
+        (> score-change 0)
+        (>= (to-int current-score) score-change-abs)
+      )
+      ERR-INVALID-SCORE
+    )
+
+    ;; Apply score change with bounds checking
+    (ok (map-set identities subject
+      (merge (unwrap-panic identity) { reputation-score: (if (> score-change 0)
+        (+ current-score (to-uint score-change))
+        (to-uint (- (to-int current-score) score-change-abs))
+      ) }
+      )))
+  )
+)
