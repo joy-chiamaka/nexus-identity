@@ -310,3 +310,76 @@
       )))
   )
 )
+
+;; RECOVERY MECHANISMS
+
+;; Initiates identity recovery through designated recovery address
+(define-public (initiate-recovery
+    (identity principal)
+    (new-hash (buff 32))
+  )
+  (let (
+      (sender tx-sender)
+      (identity-data (map-get? identities identity))
+    )
+    (asserts! (is-some identity-data) ERR-NOT-REGISTERED)
+    (asserts! (is-some (get recovery-address (unwrap-panic identity-data)))
+      ERR-NOT-AUTHORIZED
+    )
+    (asserts!
+      (is-eq sender
+        (unwrap-panic (get recovery-address (unwrap-panic identity-data)))
+      )
+      ERR-NOT-AUTHORIZED
+    )
+
+    ;; Update identity with new hash and recovery status
+    (ok (map-set identities identity
+      (merge (unwrap-panic identity-data) {
+        hash: new-hash,
+        last-updated: stacks-block-height,
+        status: "RECOVERED",
+      })
+    ))
+  )
+)
+
+;; READ-ONLY QUERY FUNCTIONS
+
+;; Retrieves complete identity information for a given principal
+(define-read-only (get-identity (identity principal))
+  (map-get? identities identity)
+)
+
+;; Fetches specific credential data by issuer and nonce
+(define-read-only (get-credential
+    (issuer principal)
+    (nonce uint)
+  )
+  (map-get? credentials {
+    issuer: issuer,
+    nonce: nonce,
+  })
+)
+
+;; Verifies credential validity including expiration and revocation status
+(define-read-only (verify-credential
+    (issuer principal)
+    (nonce uint)
+  )
+  (let ((credential (map-get? credentials {
+      issuer: issuer,
+      nonce: nonce,
+    })))
+    (asserts! (is-some credential) ERR-INVALID-CREDENTIAL)
+    (ok (and
+      (not (get revoked (unwrap-panic credential)))
+      (< stacks-block-height (get expiration (unwrap-panic credential)))
+    ))
+  )
+)
+
+;; Retrieves zero-knowledge proof data and verification status
+(define-read-only (get-proof (proof-hash (buff 32)))
+  (map-get? zero-knowledge-proofs proof-hash)
+)
